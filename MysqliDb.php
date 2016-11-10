@@ -39,7 +39,10 @@ class MysqliDb
      * @var string
      */
     protected $_query;
-    protected $_queryCount;
+
+
+    protected $_queryCount = false;
+    protected $_queryCountTrace = array();
 
     /**
      * The previously executed SQL query
@@ -266,9 +269,14 @@ class MysqliDb
      *
      * @return object Returns the current instance.
      */
-    protected function reset() {
+    public function reset() {
         if ($this->traceEnabled) {
-            $this->trace[] = array($this->_lastQuery, (microtime(true) - $this->traceStartQ), $this->_traceGetCaller());
+            $this->trace[] = array(
+                $this->_lastQuery,
+                (microtime(true) - $this->traceStartQ),
+                $this->_traceGetCaller(),
+                $this->_queryCountTrace
+            );
         }
 
         $this->_where = array();
@@ -279,6 +287,7 @@ class MysqliDb
         $this->_query = null;
         $this->_queryOptions = array();
         $this->_queryCount = false;
+        $this->_queryCountTrace = array();
         $this->returnType = 'Array';
         $this->_nestJoin = false;
         $this->_forUpdate = false;
@@ -408,7 +417,7 @@ class MysqliDb
         $result->free();
 
         if ($this->_queryCount) {
-            $this->_execQueryCount($query);
+            $this->execQueryCoun($query);
         }
 
         $this->reset();
@@ -557,15 +566,19 @@ class MysqliDb
         return $this;
     }
 
-    protected  function  _execQueryCount($query) {
-        $queryCount = preg_replace('/^\s*select(.*?)from/i', 'SELECT count(*) FROM', $query);
-        $queryCount = preg_replace('/order\s+by\s+\S+\s+(asc|desc)*\s*/i', '', $queryCount);
-        $queryCount = preg_replace('/limit\s+\d+\s*\,\s*\d+/i', '', $queryCount);
+    public function  execQueryCoun($sql) {
+        $queryCount = preg_replace('/^\s*SELECT(.*?)FROM/i', 'SELECT count(*) FROM', $sql);
+        //foo(?!.*foo) 只替换最后一次出现
+        $queryCount = preg_replace('/(ORDER(?!.*ORDER)\s+BY\s+[0-9a-zA-Z.`]+\s+(ASC|DESC)*\s*)/i', '', $queryCount);
+        $queryCount = preg_replace('/LIMIT(?!.*LIMIT)\s+\d+\s*\,\s*\d+/i', '', $queryCount);
 
         //set default value
         $this->totalCount = 0;
 
         if ($queryCount && !$this->_stmtError) {
+            if ($this->traceEnabled) {
+                $traceStartQ = microtime(true);
+            }
             $result = $this->mysqli()->query($queryCount);
             if ($result instanceof mysqli_result) {
                 $this->totalCount = $result->fetch_row()[0];
@@ -573,14 +586,21 @@ class MysqliDb
             } else {
                 $this->_stmtError = $this->mysqli()->error;
             }
+            if ($this->traceEnabled) {
+                $this->_queryCountTrace = array(
+                    $queryCount,
+                    (microtime(true) - $traceStartQ),
+                );
+            }
         }
+        return $this;
     }
 
     /**
      * A convenient SELECT * function.
      *
      * @param string        $tableName The name of the database table to work with.
-     * @param integer|array $numRows   Array to define SQL limit in format Array ($count, $offset)
+     * @param integer|array $numRows   Array to define SQL limit in format Array ($offset, $count)
      *                                 or only $count
      *
      * @return array Contains the returned rows from the select query.
@@ -1169,7 +1189,7 @@ class MysqliDb
         }
 
         if ($this->_queryCount) {
-            $this->_execQueryCount($this->_lastQuery);
+            $this->execQueryCoun($this->_lastQuery);
         }
 
         if ($this->returnType == 'Json') {
@@ -1382,7 +1402,7 @@ class MysqliDb
     /**
      * Abstraction method that will build the LIMIT part of the WHERE statement
      *
-     * @param integer|array $numRows Array to define SQL limit in format Array ($count, $offset)
+     * @param integer|array $numRows Array to define SQL limit in format Array ($offset, $count)
      *                               or only $count
      */
     protected function _buildLimit($numRows) {
